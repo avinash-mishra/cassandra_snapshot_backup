@@ -1,0 +1,30 @@
+---
+- hosts: "{{ nodes }}"
+
+  vars:
+    # extra-vars are nodes, path, reload
+    host_snapshotter_directory: "~/ansible_playbook/snapshotter"
+    save_snapshot_directory: "{{ path }}"
+
+  tasks:
+
+  - name: Delete old snapshotter files if exist
+    file:
+      path: "{{ host_snapshotter_directory }}"
+      state: absent
+
+  - name: Copy cassandra snapshotter to nodes
+    copy:
+      src: "{{ playbook_dir }}/snapshotter"
+      dest: ~/ansible_playbook
+      force: yes
+
+  - name: check if pyyaml installed
+    command: python -c "import yaml"
+    register: pyyaml
+    ignore_errors: True
+
+  - name: import error
+    pip: name=pyyaml version=3.11
+    become: true
+    when: pyyaml.rc != 0

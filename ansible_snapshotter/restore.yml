@@ -1,0 +1,176 @@
+---
+- hosts: "{{ nodes }}"
+
+  vars:
+    # extra-vars are nodes, reload, hard_reset
+    host_snapshotter_directory: "~/ansible_playbook/snapshotter"
+
+  tasks:
+
+    # Reload snapshotter files
+  - name: Delete old snapshotter files (--reload)
+    file:
+      path: "{{ host_snapshotter_directory }}"
+      state: absent
+    when: reload
+
+  - name: Copy cassandra snapshotter to nodes (--reload)
+    copy:
+      src: "{{ playbook_dir }}/snapshotter"
+      dest: ~/ansible_playbook
+      force: yes
+    when: reload
+
+    # Check script dependencies
+  - name: check if pyyaml installed
+    command: python -c "import yaml"
+    register: pyyaml
+    ignore_errors: True
+
+  - name: import error
+    pip: name=pyyaml version=3.11
+    become: True
+    when: pyyaml.rc != 0
+
+    # Hard Reset
+  - name: Shutdown and clean Cassandra files (--hard-reset)
+    command: "python {{ host_snapshotter_directory }}/hard_reset.py -s shutdown"
+    register: reset_output1
+    when: hard_reset
+    ignore_errors: True
+
+  - name: Write stage 1 hard_reset.py output to file (--hard-reset)
+    local_action: >
+      copy
+      content="{{ reset_output1.stdout }}"
+      dest="{{ playbook_dir }}/output_logs/hard_reset_shutdown-{{ inventory_hostname }}.txt"
+      force=yes
+    when: hard_reset
+
+  - fail:
+      msg: >
+        "Error in running hard_reset.py, script output located in"
+        "./output_logs/reset-{{ inventory_hostname }}.txt"
+    when: hard_reset and reset_output1.rc != 0
+
+  - name: Restart Cassandra (--hard-reset)
+    command: "nohup python {{ host_snapshotter_directory }}/hard_reset.py -s start"
+    register: reset_output2
+    when: hard_reset
+    ignore_errors: True
+
+  - name: Write stage 2 hard_reset.py output to file (--hard-reset)
+    local_action: >
+      copy
+      content="{{ reset_output2.stdout }}"
+      dest="{{ playbook_dir }}/output_logs/hard_reset_start-{{ inventory_hostname }}.txt"
+      force=yes
+    when: hard_reset
+
+  - fail:
+      msg: >
+        "Error in running hard_reset.py, script output located in"
+        "./output_logs/reset-{{ inventory_hostname }}.txt"
+    when: hard_reset and reset_output2.rc != 0
+
+    # Remove existing schema
+  - name: Run destroy schema on one machine
+    command: "python {{ host_snapshotter_directory }}/destroy.py"
+    run_once: True
+    delegate_to: "{{ play_hosts[0] }}"
+    register: destroy_output
+    
+  - name: Write destroy.py output to file
+    local_action: >
+      copy
+      content="{{ destroy_output.stdout }}"
+      dest="{{ playbook_dir }}/output_logs/destroy-{{ inventory_hostname }}.txt"
+      force=yes
+    run_once: True
+    delegate_to: "{{ play_hosts[0] }}"
+
+    # Prepare directories
+  - name: Clean all old files in all machines
+    command: "python {{ host_snapshotter_directory }}/cleaner.py"
+    register: cleaner_output
+
+  - name: Writing cleaner.py output to file
+    local_action: >
+      copy
+      content="{{ cleaner_output.stdout }}"
+      dest="{{ playbook_dir }}/output_logs/cleaner-{{ inventory_hostname }}.txt"
+      force=yes
+
+  - name: Clear .snapshots folder in nodes
+    file:
+      path: "{{ host_snapshotter_directory }}/.snapshots"
+      state: absent
+
+  - name: Create .snapshots folder in nodes if did not exist
+    file:
+      path: "{{ host_snapshotter_directory }}/.snapshots"
+      state: directory
+
+  - name: Clear .temp folder in nodes
+    file:
+      path: "{{ host_snapshotter_directory }}/.temp"
+      state: absent
+
+  - name: Create .temp folder in nodes if did not exist
+    file:
+      path: "{{ host_snapshotter_directory }}/.temp"
+      state: directory
+
+    # Load schema
+  - name: Copy schema file to one machine
+    copy:
+      src: "{{ playbook_dir }}/.temp/schemas.zip"
+      dest: "{{ host_snapshotter_directory }}/.temp"
+    run_once: True
+    delegate_to: "{{ play_hosts[0] }}"
+
+  - name: Restore schema in one machine
+    command: "python {{ host_snapshotter_directory }}/{{ load_schema_command }}"
+    register: schema_output
+    run_once: True
+    delegate_to: "{{ play_hosts[0] }}"
+    ignore_errors: yes
+
+  - name: Writing load_schema.py output to file
+    local_action: >
+      copy
+      content="{{ schema_output.stdout }}"
+      dest="{{ playbook_dir }}/output_logs/schema-{{ inventory_hostname }}.txt"
+      force=yes
+    run_once: True
+    delegate_to: "{{ play_hosts[0] }}"
+
+  - fail:
+      msg: >
+        "Error in running load_schema.py, script output located in"
+        "./output_logs/schema-{{ inventory_hostname }}.txt"
+    when: schema_output.rc != 0
+
+    # Load snapshots
+  - name: Copy snapshot files to respective nodes
+    copy:
+      src: "{{ playbook_dir }}/.temp/{{ inventory_hostname }}.zip"
+      dest: "{{ host_snapshotter_directory }}/.snapshots"
+
+  - name: Load snapshot files in all machines
+    command: "python {{ host_snapshotter_directory }}/{{ restore_command }} --nodes {{ play_hosts | join(' ') }}"
+    register: restore_output
+    ignore_errors: yes
+
+  - name: Writing restore.py output to file
+    local_action: >
+      copy
+      content="{{ restore_output.stdout }}"
+      dest="{{ playbook_dir }}/output_logs/restore-{{ inventory_hostname }}.txt"
+      force=yes
+
+  - fail:
+      msg: >
+        "Error in running restore.py, script output located in"
+        "./output_logs/restore-{{ inventory_hostname }}.txt"
+    when: restore_output.rc != 0

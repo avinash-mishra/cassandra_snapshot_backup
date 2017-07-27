@@ -1,0 +1,93 @@
+---
+- hosts: "{{ nodes }}"
+
+  vars:
+    # extra-vars are nodes, path, reload
+    host_snapshotter_directory: "~/ansible_playbook/snapshotter"
+    save_snapshot_directory: "{{ path }}"
+
+  tasks:
+
+  - name: Delete old snapshotter files (--reload)
+    file:
+      path: "{{ host_snapshotter_directory }}"
+      state: absent
+    when: reload
+
+  - name: Copy cassandra snapshotter to nodes (--reload)
+    copy:
+      src: "{{ playbook_dir }}/snapshotter"
+      dest: ~/ansible_playbook
+      force: yes
+    when: reload
+
+  - name: check if pyyaml installed
+    command: python -c "import yaml"
+    register: pyyaml
+    ignore_errors: True
+
+  - name: import error
+    pip: name=pyyaml version=3.11
+    become: true
+    when: pyyaml.rc != 0
+
+  - name: Run save schema on one machine
+    command: "python {{ host_snapshotter_directory }}/{{ save_schema_command }}"
+    register: schema_output
+    run_once: true
+    delegate_to: "{{ play_hosts[0] }}"
+    ignore_errors: yes
+
+  - name: Write schema.py output to file
+    local_action: >
+      copy
+      content="{{ schema_output.stdout }}"
+      dest="{{ playbook_dir }}/output_logs/schema-{{ inventory_hostname }}.txt"
+      force=yes
+    run_once: true
+    delegate_to: "{{ play_hosts[0] }}"
+
+  - fail:
+      msg: > 
+        "Error in running save_schema, script output located in"
+        "./output_logs/schema-{{ inventory_hostname }}.txt"
+    when: schema_output.rc != 0
+
+  - name: Fetch save_schema from machine
+    fetch:
+      src: "{{ host_snapshotter_directory }}/.snapshots/{{ item }}"
+      dest: "{{ save_snapshot_directory }}"
+      flat: yes
+      fail_on_missing: yes
+    with_items:
+      - "ring_info.txt"
+      - "schemas.zip"
+    run_once: true
+    delegate_to: "{{ play_hosts[0] }}"
+
+
+  - name: Run snapshotter on all nodes
+    command: "python {{ host_snapshotter_directory }}/{{ snapshotter_command }}"
+    register: snapshot_output
+    ignore_errors: yes
+
+  - name: Writing snapshotter.py output to file
+    local_action: >
+      copy
+      content="{{ snapshot_output.stdout }}"
+      dest="{{ playbook_dir }}/output_logs/snapshot-{{ inventory_hostname }}.txt"
+      force=yes
+
+  - fail:
+      msg: >
+        "Error in running snapshotter, script output located in"
+        "./output_logs/snapshot-{{ inventory_hostname }}.txt"
+    when: snapshot_output.rc != 0
+
+  - name: Retrieve node snapshots
+    fetch:
+      src: "{{ host_snapshotter_directory }}/.snapshots/{{ inventory_hostname }}.zip"
+      dest: "{{ save_snapshot_directory }}"
+      fail_on_missing: yes
+      flat: yes
+
