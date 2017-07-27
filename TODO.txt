@@ -1,0 +1,12 @@
+Incremental backups
+ - This can be altered to support incremental backups, but it requires a metadata
+   file to keep this option consistent
+
+Scale testing
+ - This has not yet been tested on databases larger than 5MB
+
+S3 Multipart upload
+ - When this scales, multipart uploading will be necessary
+
+Ansible Style
+ - Roles is a more structured way to approach Ansible
