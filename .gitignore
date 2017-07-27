@@ -1,0 +1,7 @@
+venv
+*.pyc
+*.egg-info
+*.log
+.DS_Store
+.vagrant
+.eggs/
